@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kd-tree demo — OSM venues</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<header id="topbar">
+  <h1>kd-tree demo</h1>
+  <span id="source-note" class="muted">Overture Places</span>
+  <div class="controls">
+    <button id="btn-select-box" class="mode">1 · Select box</button>
+    <button id="btn-use-view" class="ghost">use view</button>
+    <button id="btn-count" class="ghost" title="Read the Parquet footers to see how much data this box needs">estimate</button>
+    <span id="box-count" class="chip">no box selected</span>
+    <label>max venues <input id="max-venues" class="wide" type="text" inputmode="numeric" autocomplete="off" value="1 000 000"></label>
+    <label class="check"><input id="named-only" type="checkbox" checked> named only</label>
+    <label title="Overture scores how sure it is a place exists">min confidence
+      <input id="min-conf" type="number" min="0" max="1" step="0.05" value="0"></label>
+    <button id="btn-download" class="primary">2 · Download venues</button>
+    <button id="btn-sample" class="ghost" title="8000 venues bundled with the demo — works with no network">load sample</button>
+  </div>
+  <div class="controls">
+    <button id="btn-pick" class="mode">3 · Pick point</button>
+    <label>k nearest <input id="k-value" type="number" min="1" max="500" step="1" value="10"></label>
+    <span class="sep"></span>
+    <label>leaf size <input id="leaf-size" type="number" min="1" max="2000" step="1" value="8"></label>
+    <button id="btn-rebuild">Rebuild tree</button>
+    <span class="sep"></span>
+    <label>depth shown <input id="max-depth" type="number" min="1" max="30" step="1" value="7"></label>
+    <label class="check"><input id="show-splits" type="checkbox" checked> split lines</label>
+    <label class="check"><input id="show-venues" type="checkbox" checked> venues</label>
+    <label class="check" title="Venues whose distance the search actually computed"><input id="show-tested" type="checkbox" checked> tested</label>
+  </div>
+</header>
+
+<main>
+  <section id="left">
+    <div id="map"></div>
+    <div id="statusbar">
+      <span id="progress" hidden>
+        <span id="progress-track"><span id="progress-fill"></span></span>
+        <span id="progress-label"></span>
+        <button id="btn-cancel" class="ghost">cancel</button>
+      </span>
+      <span id="status">Pick a bounding box on the map, then download venues.</span>
+      <span id="cache-info"></span>
+    </div>
+  </section>
+
+  <section id="right">
+    <div id="tree-header">
+      <strong>kd-tree</strong>
+      <span id="tree-stats" class="muted"></span>
+      <span class="spacer"></span>
+      <span id="step-group">
+        <button id="btn-up" class="step" title="Move to the parent node (↑)" disabled>↑ up</button>
+        <span id="step-label" class="muted">—</span>
+        <button id="btn-down" class="step" title="Follow the query point one level deeper (↓)" disabled>deeper ↓</button>
+      </span>
+      <button id="btn-fit" class="ghost">fit</button>
+      <button id="btn-clear-cache" class="ghost">clear cache</button>
+    </div>
+    <div id="tree-wrap">
+      <svg id="tree-svg"></svg>
+      <div id="tree-empty" class="muted">No tree yet.</div>
+    </div>
+    <div id="path-panel">
+      <div id="path-head">
+        <span>regions on the path</span>
+        <span id="path-hint" class="muted">click one to jump to it</span>
+      </div>
+      <div id="path-list"></div>
+    </div>
+    <div id="detail"></div>
+  </section>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="js/kdtree.js"></script>
+<script src="js/cache.js"></script>
+<script src="data/overture-index.js"></script>
+<script src="js/overture.js"></script>
+<script src="js/treeview.js"></script>
+<script src="js/mapview.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
