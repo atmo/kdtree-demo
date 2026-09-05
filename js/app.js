@@ -382,6 +382,16 @@
     return mapView.showTested(state.search.tested, DRAW_LIMIT);
   }
 
+  /* The leaf regions the search opened, in the same violet as the venues it
+   * measured inside them. */
+  function drawOpenedLeaves() {
+    if (!state.search || !$('show-leaves').checked) {
+      mapView.leafLayer.clearLayers();
+      return 0;
+    }
+    return mapView.showOpenedLeaves(state.search.openedLeaves);
+  }
+
   /* Hand a freshly loaded venue set to the map and the tree. */
   function usePoints(points, truncated) {
     state.points = points;
@@ -518,6 +528,7 @@
     state.leafNode = path[path.length - 1].node;
 
     mapView.showQuery(state.query);
+    drawOpenedLeaves();
     drawTested();
     mapView.showResults(state.query, res.results, res.radius);
     renderSplits();
@@ -530,7 +541,8 @@
       (state.searchReps > 1 ? ' (mean of ' + fmtNum(state.searchReps) + ' runs)' : '') +
       ' · ' + fmtNum(res.examined) + ' of ' + fmtNum(brute) +
       ' venues tested (' + (100 * res.examined / brute).toFixed(1) +
-      '%, violet on the map) · ' + res.pruned.size + ' subtrees pruned', 'ok');
+      '%) · ' + fmtNum(res.leavesVisited) + ' leaves opened' +
+      ' — both violet on the map · ' + res.pruned.size + ' subtrees pruned', 'ok');
   }
 
   /* ---------- stepping down the query path ---------- */
@@ -866,6 +878,7 @@
     });
     $('show-splits').addEventListener('change', renderSplits);
     $('show-tested').addEventListener('change', drawTested);
+    $('show-leaves').addEventListener('change', drawOpenedLeaves);
     $('show-venues').addEventListener('change', function () {
       var drawn = drawVenues();
       if (drawn && drawn < state.points.length) {

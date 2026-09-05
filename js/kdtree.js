@@ -216,6 +216,7 @@
     // work the search did.  Capped: a huge k should not hold a second copy of
     // the dataset.
     var tested = [], TESTED_CAP = 50000;
+    var openedLeaves = [];         // the leaf nodes whose points we measured
 
     function worst() { return heap.length ? heap[0].d : Infinity; }
     function push(p, d) {
@@ -254,6 +255,7 @@
       visited.add(node.id);
       if (node.points) {
         leavesVisited++;
+        openedLeaves.push(node);
         for (var i = 0; i < node.points.length; i++) {
           var p = node.points[i];
           var dx = (p.x - x) * scale, dy = p.y - y;
@@ -277,6 +279,7 @@
       visited: visited,
       pruned: pruned,
       tested: tested,
+      openedLeaves: openedLeaves,
       testedCapped: examined > tested.length,
       examined: examined,
       leavesVisited: leavesVisited,

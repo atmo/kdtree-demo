@@ -20,8 +20,8 @@
     // Canvas and SVG layers do not interleave by insertion order, so each
     // group gets its own pane with an explicit z-index.  The tree's split
     // lines and cells must read on top of the venue dots.
-    var panes = [['venues', 400], ['tested', 410], ['splits', 450],
-                 ['cells', 460], ['results', 470], ['box', 480]];
+    var panes = [['venues', 400], ['leafcells', 405], ['tested', 410],
+                 ['splits', 450], ['cells', 460], ['results', 470], ['box', 480]];
     var self = this;
     panes.forEach(function (p) {
       var pane = self.map.createPane(p[0]);
@@ -35,6 +35,7 @@
     this.renderer = L.canvas({ padding: 0.3, pane: 'venues' });
     this.testedRenderer = L.canvas({ padding: 0.3, pane: 'tested' });
     this.venueLayer = L.layerGroup([], { pane: 'venues' }).addTo(this.map);
+    this.leafLayer = L.layerGroup([], { pane: 'leafcells' }).addTo(this.map);
     this.testedLayer = L.layerGroup([], { pane: 'tested' }).addTo(this.map);
     this.splitLayer = L.layerGroup([], { pane: 'splits' }).addTo(this.map);
     this.cellLayer = L.layerGroup([], { pane: 'cells' }).addTo(this.map);
@@ -150,6 +151,26 @@
       group.push(m);
     }
     L.layerGroup(group, { pane: 'venues' }).addTo(this.venueLayer);
+    return group.length;
+  };
+
+  /* The regions the search actually opened and read points out of. */
+  MapView.prototype.showOpenedLeaves = function (leaves) {
+    this.leafLayer.clearLayers();
+    if (!leaves || !leaves.length) return 0;
+    var group = leaves.map(function (n) {
+      var c = n.cell;
+      return L.rectangle([[c.minY, c.minX], [c.maxY, c.maxX]], {
+        pane: 'leafcells',
+        color: '#c084fc',            // same violet as the tested venues
+        weight: 1.4,
+        dashArray: '3 3',
+        fillColor: '#c084fc',
+        fillOpacity: 0.14,
+        interactive: false
+      });
+    });
+    L.layerGroup(group, { pane: 'leafcells' }).addTo(this.leafLayer);
     return group.length;
   };
 
@@ -291,6 +312,7 @@
   MapView.prototype.clearData = function () {
     this.clearVenueFocus();
     this.venueLayer.clearLayers();
+    this.leafLayer.clearLayers();
     this.testedLayer.clearLayers();
     this.splitLayer.clearLayers();
     this.cellLayer.clearLayers();

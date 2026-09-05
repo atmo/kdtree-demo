@@ -1,4 +1,5 @@
 :root {
+  --tested: #c084fc;
   --bg: #0f1115;
   --panel: #171a21;
   --panel-2: #1e222b;
@@ -241,6 +242,7 @@ button.step:not(:disabled) { border-color: #3d4657; }
 .node rect, .node circle, .node polygon { stroke-width: 1.4; }
 .node .body { fill: var(--panel-2); stroke: #3a4252; }
 .node.leaf .body { fill: #1b3327; stroke: #2f6b4a; }
+.node.leaf.opened .body { fill: #2b1f42; stroke: #c084fc; stroke-width: 2; }
 .node.on-path .body { stroke: var(--path); stroke-width: 2.2; }
 .node.target .body { fill: #4a1f1f; stroke: var(--path); stroke-width: 2.6; }
 .node.collapsed .body { fill: #22262f; stroke: #444d5f; stroke-dasharray: 3 2; }

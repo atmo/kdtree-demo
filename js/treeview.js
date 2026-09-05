@@ -138,6 +138,7 @@
       var cls = 'node';
       if (n.points) cls += ' leaf';
       if (it.collapsed) cls += ' collapsed';
+      if (n.points && opts.visited && opts.visited.has(n.id)) cls += ' opened';
       if (pathIds.has(n.id)) cls += ' on-path';
       if (n.id === opts.targetId) cls += ' target';
       if (n.id === opts.selectedId) cls += ' selected';
@@ -153,6 +154,7 @@
         class: 'body', x: 0, y: 0, width: BOX_W, height: BOX_H, rx: 6
       }, g);
 
+      var opened = n.points && opts.visited && opts.visited.has(n.id);
       el('title', {}, g).textContent = it.collapsed
         ? n.count + ' venues below here — click to expand'
         : (n.points ? 'leaf with ' + n.count + ' venues' :
@@ -163,7 +165,7 @@
         line1 = '▾ expand';
         line2 = n.count + ' pts · d' + n.depth;
       } else if (n.points) {
-        line1 = 'leaf · ' + n.count + ' pts';
+        line1 = (opened ? '◆ ' : '') + 'leaf · ' + n.count + ' pts';
         line2 = n.points.length === 1 && n.points[0].name
           ? trunc(n.points[0].name, 17) : 'depth ' + n.depth;
       } else {
