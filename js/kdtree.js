@@ -52,13 +52,26 @@
     return { lt: lt - lo, eq: gt - lt + 1 };
   }
 
-  function build(points, leafSize, rootCell) {
+  /* opts.rule : 'median'   split at the median point   (balanced counts)
+   *             'midpoint' split the region in half      (equal areas)
+   * opts.axis : 'widest'    the axis with the larger real-world spread
+   *             'alternate' x, y, x, y, ... by depth
+   *
+   * Midpoint splitting cannot separate points at identical coordinates, so it
+   * needs a depth cap; median splitting detects the tie and emits a leaf. */
+  var MIDPOINT_MAX_DEPTH = 64;
+
+  function build(points, leafSize, rootCell, opts) {
+    opts = opts || {};
+    var rule = opts.rule === 'midpoint' ? 'midpoint' : 'median';
+    var axisRule = opts.axis === 'alternate' ? 'alternate' : 'widest';
     leafSize = Math.max(1, leafSize | 0);
     var n = points.length;
     var idx = new Int32Array(n);
     for (var i = 0; i < n; i++) idx[i] = i;
 
-    var stats = { nodes: 0, leaves: 0, maxDepth: 0, points: n, leafSize: leafSize };
+    var stats = { nodes: 0, leaves: 0, maxDepth: 0, points: n, leafSize: leafSize,
+                  emptyLeaves: 0, cappedLeaves: 0, rule: rule, axis: axisRule };
     var nextId = 0;
 
     function tightBounds(lo, hi) {
@@ -92,6 +105,25 @@
         ? loEnd : eqEnd;
     }
 
+    /* Reorders [lo..hi] so everything <= split comes first; returns the index
+     * of the last such element (lo-1 if none, hi if all). */
+    function partitionAt(lo, hi, key, split) {
+      var i = lo, j = hi;
+      while (i <= j) {
+        if (points[idx[i]][key] <= split) i++;
+        else { swap(idx, i, j); j--; }
+      }
+      return i - 1;
+    }
+
+    function emptyLeaf(depth, cell) {
+      stats.nodes++; stats.leaves++; stats.emptyLeaves++;
+      if (depth > stats.maxDepth) stats.maxDepth = depth;
+      return { id: nextId++, depth: depth, count: 0, cell: cell,
+               bbox: { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity },
+               axis: -1, split: null, left: null, right: null, parent: null, points: [] };
+    }
+
     function makeLeaf(node, lo, hi) {
       stats.leaves++;
       node.points = [];
@@ -120,10 +152,36 @@
       var b = node.bbox;
       var spanX = (b.maxX - b.minX) * Math.cos((b.minY + b.maxY) / 2 * Math.PI / 180);
       var spanY = b.maxY - b.minY;
-      var axis = spanX >= spanY ? 0 : 1;
+      var axis = axisRule === 'alternate' ? (depth % 2) : (spanX >= spanY ? 0 : 1);
       var key = axis === 0 ? 'x' : 'y';
+      var mid, split, i, v;
 
-      var mid = chooseSplit(lo, hi, key);
+      if (rule === 'midpoint') {
+        if (depth >= MIDPOINT_MAX_DEPTH) {      // duplicate coordinates: give up
+          stats.cappedLeaves++;
+          return makeLeaf(node, lo, hi);
+        }
+        split = axis === 0 ? (cell.minX + cell.maxX) / 2 : (cell.minY + cell.maxY) / 2;
+        mid = partitionAt(lo, hi, key, split);
+        node.axis = axis;
+        node.split = split;
+        var lc0, rc0;
+        if (axis === 0) {
+          lc0 = { minX: cell.minX, minY: cell.minY, maxX: split, maxY: cell.maxY };
+          rc0 = { minX: split, minY: cell.minY, maxX: cell.maxX, maxY: cell.maxY };
+        } else {
+          lc0 = { minX: cell.minX, minY: cell.minY, maxX: cell.maxX, maxY: split };
+          rc0 = { minX: cell.minX, minY: split, maxX: cell.maxX, maxY: cell.maxY };
+        }
+        // An empty half is normal here — keep halving until the points separate.
+        node.left = mid < lo ? emptyLeaf(depth + 1, lc0) : rec(lo, mid, depth + 1, lc0);
+        node.right = mid === hi ? emptyLeaf(depth + 1, rc0) : rec(mid + 1, hi, depth + 1, rc0);
+        node.left.parent = node;
+        node.right.parent = node;
+        return node;
+      }
+
+      mid = chooseSplit(lo, hi, key);
       if (mid === null) {                       // try the other axis instead
         axis = 1 - axis;
         key = axis === 0 ? 'x' : 'y';
@@ -131,9 +189,9 @@
         if (mid === null) return makeLeaf(node, lo, hi);  // all points identical
       }
 
-      var split = -Infinity;
-      for (var i = lo; i <= mid; i++) {
-        var v = points[idx[i]][key];
+      split = -Infinity;
+      for (i = lo; i <= mid; i++) {
+        v = points[idx[i]][key];
         if (v > split) split = v;
       }
       node.axis = axis;
@@ -287,6 +345,119 @@
     };
   }
 
+  /* Same answer as knn(), without the heap.
+   *
+   * Phase 1 descends to the query point's leaf and climbs until the subtree
+   * holds at least k points, then sorts them: the k-th distance is a valid
+   * upper bound on the true k-th nearest.  Phase 2 walks back up, testing one
+   * sibling per level against that radius and letting it shrink on the way.
+   *
+   * Trades ~30% more distance computations at large k for no heap code, and
+   * returns its results already sorted. */
+  function knnClimb(root, x, y, k) {
+    k = Math.max(1, k | 0);
+    var scale = Math.cos(y * Math.PI / 180);
+    var cand = [], r2 = Infinity;
+    var visited = new Set(), pruned = new Set();
+    var tested = [], openedLeaves = [], TESTED_CAP = 50000;
+    var examined = 0, leavesVisited = 0, sorts = 0;
+
+    function dist2(p) {
+      var dx = (p.x - x) * scale, dy = p.y - y;
+      return dx * dx + dy * dy;
+    }
+    function boxDist2(c) {
+      var dx = x < c.minX ? c.minX - x : (x > c.maxX ? x - c.maxX : 0);
+      var dy = y < c.minY ? c.minY - y : (y > c.maxY ? y - c.maxY : 0);
+      dx *= scale;
+      return dx * dx + dy * dy;
+    }
+    function settle() {
+      sorts++;
+      cand.sort(function (a, b) { return a.d - b.d; });
+      if (cand.length > k) cand.length = k;
+      // Until k candidates exist there is no k-th distance to prune by.
+      r2 = cand.length === k ? cand[k - 1].d : Infinity;
+    }
+    function measure(node) {
+      visited.add(node.id);
+      leavesVisited++;
+      openedLeaves.push(node);
+      for (var i = 0; i < node.points.length; i++) {
+        var p = node.points[i];
+        examined++;
+        if (tested.length < TESTED_CAP) tested.push(p);
+        var d = dist2(p);
+        if (d <= r2) cand.push({ p: p, d: d });
+      }
+    }
+
+    if (!root) return emptyResult(k);
+
+    /* ---- phase 1: seed ---- */
+    var node = root;
+    while (!node.points) {
+      visited.add(node.id);
+      node = (node.axis === 0 ? x : y) <= node.split ? node.left : node.right;
+    }
+    while (node.count < k && node.parent) node = node.parent;
+    var seedNode = node;
+    (function collect(n) {
+      if (!n) return;
+      if (n.points) { measure(n); return; }
+      visited.add(n.id);
+      collect(n.left);
+      collect(n.right);
+    })(seedNode);
+    settle();
+
+    /* ---- phase 2: climb, one sibling per level ---- */
+    var cur = seedNode;
+    while (cur.parent) {
+      var parent = cur.parent;
+      var sibling = parent.left === cur ? parent.right : parent.left;
+      visited.add(parent.id);
+      if (boxDist2(sibling.bbox) <= r2) {
+        (function search(n) {
+          if (!n) return;
+          if (boxDist2(n.bbox) > r2) { pruned.add(n.id); return; }
+          if (n.points) {
+            measure(n);
+            if (cand.length >= 2 * k) settle();
+            return;
+          }
+          visited.add(n.id);
+          var near = (n.axis === 0 ? x : y) <= n.split ? n.left : n.right;
+          search(near);
+          search(near === n.left ? n.right : n.left);
+        })(sibling);
+        settle();
+      } else {
+        pruned.add(sibling.id);
+      }
+      cur = parent;
+    }
+    settle();
+
+    return {
+      results: cand.map(function (e) {
+        return { point: e.p, dist: Math.sqrt(e.d) * 111320 };
+      }),
+      visited: visited, pruned: pruned, tested: tested,
+      openedLeaves: openedLeaves,
+      testedCapped: examined > tested.length,
+      examined: examined, leavesVisited: leavesVisited,
+      sorts: sorts, seedCount: seedNode.count, seedDepth: seedNode.depth,
+      radius: cand.length ? Math.sqrt(cand[cand.length - 1].d) * 111320 : 0
+    };
+  }
+
+  function emptyResult() {
+    return { results: [], visited: new Set(), pruned: new Set(), tested: [],
+             openedLeaves: [], testedCapped: false, examined: 0,
+             leavesVisited: 0, sorts: 0, seedCount: 0, seedDepth: 0, radius: 0 };
+  }
+
   function eachNode(root, fn) {
     var stack = root ? [root] : [];
     while (stack.length) {
@@ -307,7 +478,8 @@
   }
 
   global.KD = {
-    build: build, locate: locate, nearest: nearest, knn: knn,
+    build: build, locate: locate, nearest: nearest,
+    knn: knn, knnClimb: knnClimb,
     eachNode: eachNode, collect: collect
   };
 })(window);

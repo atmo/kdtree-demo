@@ -27,8 +27,20 @@
   <div class="controls">
     <button id="btn-pick" class="mode">3 · Pick point</button>
     <label>k nearest <input id="k-value" type="number" min="1" max="500" step="1" value="10"></label>
+    <label title="Optimal: one depth-first pass with a bounded max-heap. Simplified: sort a seed subtree for a radius, then climb.">query
+      <select id="algo">
+        <option value="heap">optimal · heap</option>
+        <option value="climb">simplified · sort + climb</option>
+      </select>
+    </label>
     <span class="sep"></span>
     <label>leaf size <input id="leaf-size" type="number" min="1" max="2000" step="1" value="8"></label>
+    <label title="Optimal: split at the median point, on the axis with the larger spread. Simplified: halve the region, alternating x and y.">build
+      <select id="build-rule">
+        <option value="median">optimal · median + widest</option>
+        <option value="midpoint">simplified · midpoint + alternating</option>
+      </select>
+    </label>
     <button id="btn-rebuild">Rebuild tree</button>
     <span class="sep"></span>
     <label>depth shown <input id="max-depth" type="number" min="1" max="30" step="1" value="7"></label>

@@ -140,6 +140,8 @@ rather than a misleading `0.00 ms`.
 | setting | effect |
 |---|---|
 | `k nearest` | how many neighbours to find |
+| `query` | which kNN algorithm runs — `optimal · heap` or `simplified · sort + climb` |
+| `build` | how the tree is built — `optimal · median + widest` or `simplified · midpoint + alternating`. Switching rebuilds the tree |
 | `leaf size` | max points per leaf; rebuilds the tree |
 | `depth shown` | how deep the tree is drawn before subtrees collapse |
 | `max venues` | cap on downloaded venues (default 1 000 000); the read stops once reached |
@@ -172,6 +174,197 @@ kNN is branch-and-bound over a bounded max-heap: descend to the query point's
 leaf, then only visit a sibling if its bounding box is closer than the current
 *k*-th best. Verified against brute force for k = 1…200; on 20 526 venues a
 k = 10 query typically tests **~25 points, about 0.1%**.
+
+## Optimal vs simplified, side by side
+
+Both switches in the top bar pick between a version that is careful and one
+that is naive. The code below is the essential difference in each case; every
+number was measured in one run over the bundled 20 526-venue Berlin set at
+leaf size 16.
+
+### Building the tree
+
+<table>
+<tr>
+<th align="left">optimal &mdash; median + widest axis</th>
+<th align="left">simplified &mdash; midpoint + alternating</th>
+</tr>
+<tr>
+<td valign="top">
+
+<pre lang="js">
+// axis — the one with the larger
+// REAL-WORLD spread (lon x cos lat)
+var spanX = (b.maxX - b.minX) * cosLat;
+var spanY = b.maxY - b.minY;
+var axis  = spanX &gt;= spanY ? 0 : 1;
+
+// split — the median point.
+// quickselect to the middle slot, then
+// a 3-way partition groups the ties
+var mid = chooseSplit(lo, hi, key);
+if (mid === null) {        // axis constant
+  axis = 1 - axis;         // try the other
+  mid  = chooseSplit(lo, hi, key);
+  if (mid === null)        // all identical
+    return makeLeaf(node, lo, hi);
+}
+// the boundary is the LARGEST value on
+// the left, so `v &lt;= split` is exact
+split = max(points[lo..mid][key]);
+
+// both children always hold points
+node.left  = rec(lo,     mid, d+1, lc);
+node.right = rec(mid+1,  hi,  d+1, rc);
+</pre>
+
+</td>
+<td valign="top">
+
+<pre lang="js">
+// axis — just alternate x, y, x, y
+var axis = depth % 2;
+
+
+
+
+// split — the middle of the REGION,
+// wherever the points happen to be
+split = axis === 0
+  ? (cell.minX + cell.maxX) / 2
+  : (cell.minY + cell.maxY) / 2;
+var mid = partitionAt(lo, hi, key, split);
+
+// points at identical coordinates never
+// separate, so the recursion needs a cap
+if (depth &gt;= MIDPOINT_MAX_DEPTH)
+  return makeLeaf(node, lo, hi);
+
+
+// either child may come back empty
+node.left  = mid &lt;  lo ? emptyLeaf(d+1, lc)
+                       : rec(lo, mid, d+1, lc);
+node.right = mid === hi ? emptyLeaf(d+1, rc)
+                        : rec(mid+1, hi, d+1, rc);
+</pre>
+
+</td>
+</tr>
+</table>
+
+| | optimal | simplified |
+|---|---|---|
+| build time | 42 ms | **19 ms** |
+| depth | **12** | 64 — the cap |
+| nodes | **4 071** | 5 451 |
+| leaves | 2 036 | 2 726 |
+| empty leaves | **0** | 545 |
+| leaves that hit the depth cap | **0** | 10 |
+| mean split balance (0.5 = even) | **0.4885** | 0.2499 |
+| mean venues per leaf | 10.1 | 7.5 |
+
+Simplified builds **2× faster** — no median selection, just arithmetic on the
+cell. What it buys with that is a tree a third larger, 545 leaves holding
+nothing, and a depth of 64 instead of 12. The balance figure explains the
+shape: median splitting puts almost exactly half the points on each side
+(0.4885), while halving the region puts a quarter on one side and
+three-quarters on the other (0.2499), because venues are not spread evenly
+through a city.
+
+The 10 capped leaves are the real hazard. 3 608 of these venues share a
+coordinate with another one, the biggest pile-up being 56 at a single point,
+and **halving a region can never separate points that sit on top of each
+other**. Without `MIDPOINT_MAX_DEPTH` that recursion does not terminate.
+Median splitting detects the tie through its 3-way partition and emits a leaf.
+
+### Searching
+
+<table>
+<tr>
+<th align="left">optimal &mdash; heap, one pass</th>
+<th align="left">simplified &mdash; sort a seed, then climb</th>
+</tr>
+<tr>
+<td valign="top">
+
+<pre lang="js">
+// one pass, nearest child first,
+// with a bounded max-heap of k
+
+if (heap.length === k &amp;&amp;
+    cellDist2(node.bbox) &gt; worst()) {
+  pruned.add(node.id);      // whole subtree
+  return;
+}
+
+if (node.points) {
+  for (var i = 0; i &lt; node.points.length; i++)
+    push(p, dist2(p));      // sift into heap
+  return;                   // radius tightens
+}                           // on every insert
+
+var first = (node.axis === 0 ? x : y)
+          &lt;= node.split ? node.left : node.right;
+walk(first);                // near side first
+walk(first === node.left ? node.right
+                         : node.left);
+</pre>
+
+</td>
+<td valign="top">
+
+<pre lang="js">
+// phase 1 — earn a radius by SORTING
+var node = leaf containing q;
+while (node.count &lt; k &amp;&amp; node.parent)
+  node = node.parent;       // climb to &gt;= k
+collect(node);              // measure them all
+settle();                   // sort -&gt; r2
+
+// phase 2 — walk back up, one sibling
+// per level, r2 shrinking as we go
+var cur = node;
+while (cur.parent) {
+  var sib = sibling of cur;
+  if (boxDist2(sib.bbox) &lt;= r2) {
+    search(sib);            // range scan
+    settle();               // re-sort, tighten
+  }
+  cur = cur.parent;
+}
+settle();                   // results sorted
+</pre>
+
+</td>
+</tr>
+</table>
+
+All four combinations return exactly the right answer — verified against brute
+force on 200 queries at each k below (`yes` in every row):
+
+| build | query | k=10 | k=100 | k=500 |
+|---|---|---|---|---|
+| optimal | heap | **7.1 µs** · 43 examined | **38.2 µs** · 227 | **219.7 µs** · 898 |
+| optimal | climb | 10.8 µs · 45 | 62.3 µs · 289 | 311.7 µs · 1 125 |
+| simplified | heap | 8.8 µs · 40 | 40.9 µs · 216 | 211.8 µs · 868 |
+| simplified | climb | 10.7 µs · 44 | 67.1 µs · 290 | 352.4 µs · 1 210 |
+
+Two things stand out, and neither is what you would guess.
+
+**The build strategy barely affects query speed.** Simplified trees even
+examine slightly *fewer* points (216 vs 227 at k=100) — halved regions are
+squarish, and a square cell wraps a circular search radius better than a
+median-split sliver. Its deeper tree then costs more node visits, and the two
+effects cancel. The case against midpoint splitting is termination and memory,
+not throughput.
+
+**The search algorithm is where the real gap is**, and it widens with k:
+×1.5 at k=10, ×1.6 at k=100. The cause is visible in the `examined` column —
+289 versus 227 at k=100. Phase 1 measures the entire seed subtree (about
+1.3 × k points) with `r2 = Infinity`, before any radius exists to prune with.
+The heap gets a usable radius after its first leaf and starts pruning
+immediately. At k=1 the effect reverses and climb wins, because both examine
+identical points and appending to an array beats sifting a heap.
 
 ### Choosing a leaf size
 

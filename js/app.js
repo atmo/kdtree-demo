@@ -34,6 +34,8 @@
       limit: clampInt($('max-venues').value, 1, 5000000, 1000000),
       namedOnly: $('named-only').checked,
       minConfidence: clampFloat($('min-conf').value, 0, 1, 0),
+      algo: $('algo').value === 'climb' ? 'climb' : 'heap',
+      buildRule: $('build-rule').value === 'midpoint' ? 'midpoint' : 'median',
       showSplits: $('show-splits').checked,
       showVenues: $('show-venues').checked
     };
@@ -69,6 +71,8 @@
     if (s.limit) $('max-venues').value = fmtNum(s.limit);
     if (typeof s.namedOnly === 'boolean') $('named-only').checked = s.namedOnly;
     if (s.minConfidence != null) $('min-conf').value = s.minConfidence;
+    if (s.algo) $('algo').value = s.algo;
+    if (s.buildRule) $('build-rule').value = s.buildRule;
     return s;
   }
 
@@ -443,8 +447,13 @@
       minX: state.bbox.west, minY: state.bbox.south,
       maxX: state.bbox.east, maxY: state.bbox.north
     } : null;
+    // 'simplified' halves the region and alternates axes; 'optimal' splits at
+    // the median on the axis with the larger real-world spread.
+    var buildOpts = s.buildRule === 'midpoint'
+      ? { rule: 'midpoint', axis: 'alternate' }
+      : { rule: 'median', axis: 'widest' };
     var t0 = performance.now();
-    state.tree = KD.build(state.points, s.leafSize, rootCell);
+    state.tree = KD.build(state.points, s.leafSize, rootCell, buildOpts);
     var ms = performance.now() - t0;
     state.buildMs = ms;
     // Node objects are new after a rebuild, so any selection is stale.
@@ -474,8 +483,13 @@
     if (!state.tree) { $('tree-stats').textContent = ''; return; }
     var st = state.tree.stats;
     $('tree-stats').textContent = fmtNum(st.points) + ' pts · ' + fmtNum(st.nodes) +
-      ' nodes · ' + fmtNum(st.leaves) + ' leaves · depth ' + st.maxDepth +
-      ' · leaf≤' + st.leafSize + ' · built in ' + fmtDuration(state.buildMs);
+      ' nodes · ' + fmtNum(st.leaves) + ' leaves' +
+      (st.emptyLeaves ? ' (' + fmtNum(st.emptyLeaves) + ' empty)' : '') +
+      ' · depth ' + st.maxDepth + ' · leaf≤' + st.leafSize +
+      ' · ' + (st.rule === 'midpoint' ? 'midpoint+alt' : 'median+widest') +
+      ' · built in ' + fmtDuration(state.buildMs) +
+      (st.cappedLeaves ? ' · ' + fmtNum(st.cappedLeaves) +
+        ' leaves hit the depth cap (duplicate coordinates)' : '');
   }
 
   function renderTree() {
@@ -513,8 +527,9 @@
     if (!state.tree || !state.query) return;
     var s = settings();
     var x = state.query.lng, y = state.query.lat;
+    var search = s.algo === 'climb' ? KD.knnClimb : KD.knn;
     var timed = timeQuery(function () {
-      return KD.knn(state.tree.root, x, y, s.k);
+      return search(state.tree.root, x, y, s.k);
     });
     var res = timed.value, ms = timed.ms;
     state.searchReps = timed.reps;
@@ -537,12 +552,15 @@
     stepTo(0, { keepMapView: true });
 
     var brute = state.points.length;
-    status('k=' + s.k + ' nearest found in ' + fmtDuration(ms) +
+    status((s.algo === 'climb' ? 'sort+climb: ' : 'heap: ') +
+      'k=' + s.k + ' nearest found in ' + fmtDuration(ms) +
       (state.searchReps > 1 ? ' (mean of ' + fmtNum(state.searchReps) + ' runs)' : '') +
       ' · ' + fmtNum(res.examined) + ' of ' + fmtNum(brute) +
       ' venues tested (' + (100 * res.examined / brute).toFixed(1) +
       '%) · ' + fmtNum(res.leavesVisited) + ' leaves opened' +
-      ' — both violet on the map · ' + res.pruned.size + ' subtrees pruned', 'ok');
+      ' — both violet on the map · ' + res.pruned.size + ' subtrees pruned' +
+      (res.seedCount ? ' · seed subtree ' + fmtNum(res.seedCount) +
+        ' venues at depth ' + res.seedDepth + ', ' + res.sorts + ' sorts' : ''), 'ok');
   }
 
   /* ---------- stepping down the query path ---------- */
@@ -872,6 +890,8 @@
     });
 
     $('leaf-size').addEventListener('change', function () { rebuild(); saveSettings(); });
+    $('algo').addEventListener('change', function () { runSearch(); saveSettings(); });
+    $('build-rule').addEventListener('change', function () { rebuild(); saveSettings(); });
     $('k-value').addEventListener('change', function () { runSearch(); saveSettings(); });
     $('max-depth').addEventListener('change', function () {
       renderTree(); renderSplits(); saveSettings();

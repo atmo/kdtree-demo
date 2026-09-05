@@ -56,6 +56,16 @@ html, body {
   font: 12px var(--mono);
 }
 .controls input[type=number].wide { width: 96px; }
+.controls select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font: 12px var(--font);
+  cursor: pointer;
+}
+.controls select:hover { border-color: #3d4657; }
 .sep { width: 1px; height: 18px; background: var(--line); }
 
 button {
